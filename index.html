@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Princess Survival — статистика забегов</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 "Segoe UI", system-ui, sans-serif; background: #0f1115; color: #d7dde6; }
+  header { padding: 18px 24px 10px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  .sub { color: #8b94a3; font-size: 12px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 24px; position: sticky; top: 0; background: #0f1115ee; border-bottom: 1px solid #232833; z-index: 5; }
+  .controls select, .controls input { background: #171a21; color: #d7dde6; border: 1px solid #2a3040; border-radius: 6px; padding: 6px 8px; font: inherit; min-width: 130px; }
+  .controls input { min-width: 220px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; padding: 14px 24px; }
+  .kpi { background: #171a21; border: 1px solid #232833; border-radius: 10px; padding: 12px 14px; }
+  .kpi .v { font-size: 22px; font-weight: 600; }
+  .kpi .l { color: #8b94a3; font-size: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 12px; padding: 0 24px 12px; }
+  .card { background: #171a21; border: 1px solid #232833; border-radius: 10px; padding: 12px; }
+  .card h2 { margin: 2px 4px 8px; font-size: 14px; font-weight: 600; color: #aab4c4; }
+  .chart-box { position: relative; height: 300px; }
+  .chart-box.tall { height: 380px; }
+  section.table { padding: 6px 24px 24px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #232833; vertical-align: top; }
+  th { color: #8b94a3; font-weight: 500; position: sticky; top: 47px; background: #0f1115; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.run td { cursor: pointer; }
+  tr.run:hover { background: #1a1e27; }
+  tr.detail td { background: #12151c; }
+  .win { color: #7dd97b; } .loss { color: #e07070; }
+  .ok { color: #7dd97b; } .bad { color: #e0a050; }
+  pre.report { white-space: pre-wrap; font: 12px/1.5 Consolas, monospace; color: #b9c2d0; margin: 0; max-height: 480px; overflow: auto; }
+  .warnbox { margin: 0 24px 24px; }
+  .warnbox summary { color: #e0a050; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Princess Survival — статистика забегов</h1>
+  <div class="sub">Файл: sample.csv · Забегов: 3 · Сгенерировано: 17.11.2026 10:25</div>
+</header>
+
+<div class="controls">
+  <select id="f-version"><option value="all">Версия: все</option></select>
+  <select id="f-hero"><option value="all">Герой: все</option></select>
+  <select id="f-arena"><option value="all">Арена: все</option></select>
+  <select id="f-mode"><option value="all">Режим: все</option></select>
+  <select id="f-result"><option value="all">Результат: все</option>
+    <option value="victory">Победы</option><option value="defeat">Смерти</option></select>
+  <input id="f-q" type="search" placeholder="Поиск: тестер, комментарий, талант…">
+</div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="grid">
+  <div class="card"><h2>Винрейт по героям</h2><div class="chart-box"><canvas id="c-hero"></canvas></div></div>
+  <div class="card"><h2>Динамика по версиям</h2><div class="chart-box"><canvas id="c-version"></canvas></div></div>
+  <div class="card"><h2>Средняя доля урона по способностям</h2><div class="chart-box"><canvas id="c-dmg-avg"></canvas></div></div>
+  <div class="card"><h2>Доля урона по забегам (последние 30)</h2><div class="chart-box"><canvas id="c-dmg-runs"></canvas></div></div>
+  <div class="card"><h2>Таланты: частота пиков</h2><div class="chart-box tall"><canvas id="c-talents"></canvas></div></div>
+  <div class="card"><h2>Забег: длительность × убийства</h2><div class="chart-box"><canvas id="c-scatter"></canvas></div></div>
+  <div class="card"><h2>Карты Таро за забеги</h2><div class="chart-box"><canvas id="c-cards"></canvas></div></div>
+</div>
+
+<section class="table">
+  <h2 style="font-size:14px;color:#aab4c4;">Забеги (клик по строке — полный отчёт)</h2>
+  <table id="runs-table">
+    <thead><tr>
+      <th>Дата</th><th>Версия</th><th>Герой</th><th>Арена</th><th>Результат</th>
+      <th class="num">Убийств</th><th class="num">Урона</th><th class="num">Золото</th>
+      <th>Тестер</th><th>Впечатления</th>
+    </tr></thead>
+    <tbody id="runs-body"></tbody>
+  </table>
+</section>
+
+<div class="warnbox" id="warnings"></div>
+
+<script>
+const RUNS = [{"bosses": ["Эхо Шести Глаз"], "weapons": [{"title": "Сад", "level": 28, "talents": [{"name": "Густые корни", "mult": 9, "raw": "×9"}, {"name": "Шипастая лоза", "mult": 5, "raw": "×5"}], "stats": {"Перезарядка": "3.00 с", "Густые корни": "40.00 урона/с"}}], "damage": {"Сад": 512300, "Шипы": 209100}, "cards": {"storm": 1}, "gold": {"collected": 31, "bonus": 4, "total": 118, "banked": true}, "run_id": "aa11bb22cc33dd44ee55ff6677889900", "version": "0.2.31", "build_hash": "9c1b0a4d7e2f", "date": "12.11.2026 21:40", "date_iso": "2026-11-12T21:40:00", "mode": "одиночный", "arena": "Хребет Великой Совы", "result": {"kind": "victory", "raw": "ПОБЕДА за 32:10", "seconds": 1930}, "hero_name": "Lina Greenhollow", "class_id": "druid", "hero_level": 88, "kills": 45120, "damage_taken": 640, "cards_saved": true, "damage_total": 721400, "hero_label": "Lina Greenhollow (druid)", "weapon_count": 1, "ts": "12.11.2026 22:15:44", "tester": "Павел", "liked": "Друид стабилен после правок", "disliked": "долго собирается разгон", "ts_iso": "2026-11-12T22:15:44", "report_text": "PRINCESS SURVIVAL — технический отчёт матча\nМатч: aa11bb22cc33dd44ee55ff6677889900\nВерсия: 0.2.31 (сборка 9c1b0a4d7e2f)\nДата: 12.11.2026 21:40\nРежим: одиночный\nАрена: Хребет Великой Совы\nПобеждённые боссы: Эхо Шести Глаз\nРезультат: ПОБЕДА за 32:10\nГерой: Lina Greenhollow (druid), уровень героя 88\nУбийств: 45120. Получено урона: 640\nЗолото: собрано 31 + выход 4 = 118 (в банк: да)\nКарты за забег: storm ×1\nКарты сохранены в коллекцию: да\n--- БИЛД ---\nСад — ур. 28\n  Талант: Густые корни — ×9\n  Талант: Шипастая лоза — ×5\n  Перезарядка: 3.00 с | Густые корни: 40.00 урона/с\n--- УРОН ПО СПОСОБНОСТЯМ ---\nСад: 512 300 (71%)\nШипы: 209 100 (29%)"}, {"bosses": [], "weapons": [{"title": "Клыки", "level": 19, "talents": [{"name": "Жажда", "mult": 7, "raw": "×7"}, {"name": "Глубокий укус", "mult": 3, "raw": "×3"}], "stats": {"Перезарядка": "0.90 с", "Жажда": "14.00 урона"}}, {"title": "Туман", "level": 8, "talents": [{"name": "Плотная пелена", "mult": 2, "raw": "×2"}], "stats": {"Перезарядка": "6.00 с"}}], "damage": {"Клыки": 214500, "Туман": 131200}, "cards": {"roots": 1, "embers": 1}, "gold": null, "run_id": "f1e2d3c4b5a697886970615243354617", "version": "0.2.31", "build_hash": "9c1b0a4d7e2f", "date": "13.11.2026 19:12", "date_iso": "2026-11-13T19:12:00", "mode": "одиночный", "arena": "Хребет Великой Совы", "result": {"kind": "defeat", "raw": "СМЕРТЬ на 12:34", "seconds": 754}, "hero_name": "Mira Thorn", "class_id": "vampire", "hero_level": 41, "kills": 12844, "damage_taken": 1248, "gold_lost": 63, "cards_lost": 2, "cards_saved": false, "damage_total": 345700, "hero_label": "Mira Thorn (vampire)", "weapon_count": 2, "ts": "13.11.2026 19:40:02", "tester": "Мария", "liked": "Вампир весёлый", "disliked": "Умерла на первом элитнике, рано", "ts_iso": "2026-11-13T19:40:02", "report_text": "PRINCESS SURVIVAL — технический отчёт матча\nМатч: f1e2d3c4b5a697886970615243354617\nВерсия: 0.2.31 (сборка 9c1b0a4d7e2f)\nДата: 13.11.2026 19:12\nРежим: одиночный\nАрена: Хребет Великой Совы\nПобеждённые боссы: нет\nРезультат: СМЕРТЬ на 12:34\nГерой: Mira Thorn (vampire), уровень героя 41\nУбийств: 12844. Получено урона: 1 248\nЗолото потеряно при смерти: 63\nКарты за забег: roots ×1, embers ×1\nКарты потеряны при смерти: 2\nКарты сохранены в коллекцию: нет\n--- БИЛД ---\nКлыки — ур. 19\n  Талант: Жажда — ×7\n  Талант: Глубокий укус — ×3\n  Перезарядка: 0.90 с | Жажда: 14.00 урона\nТуман — ур. 8\n  Талант: Плотная пелена — ×2\n  Перезарядка: 6.00 с\n--- УРОН ПО СПОСОБНОСТЯМ ---\nКлыки: 214 500 (62%)\nТуман: 131 200 (38%)"}, {"bosses": ["Эхо Шести Глаз"], "weapons": [{"title": "Пила", "level": 27, "talents": [{"name": "Острая заточка", "mult": 12, "raw": "×12"}], "stats": {"Перезарядка": "1.00 с", "Острая заточка": "16.00 урона"}}], "damage": {"Газ": 489707, "Пила": 201602}, "cards": {"roots": 2, "storm": 2, "embers": 1, "dawn": 1}, "gold": {"collected": 27, "bonus": 3, "total": 105, "banked": true}, "run_id": "8d0c91bca4cf872465d374a4c5a2473d", "version": "0.2.32", "build_hash": "a5857fd8f38b", "date": "13.11.2026 20:58", "date_iso": "2026-11-13T20:58:00", "mode": "одиночный", "arena": "Хребет Великой Совы", "result": {"kind": "victory", "raw": "ПОБЕДА за 30:37", "seconds": 1837}, "hero_name": "Karen Kaurio", "class_id": "plague_doctor", "hero_level": 92, "kills": 49903, "damage_taken": 270, "cards_saved": true, "damage_total": 691309, "hero_label": "Karen Kaurio (plague_doctor)", "weapon_count": 1, "ts": "13.11.2026 21:20:33", "tester": "Павел", "liked": "Отправляю заново, в прошлый раз форма ругалась", "disliked": "", "ts_iso": "2026-11-13T21:20:33", "report_text": "PRINCESS SURVIVAL — технический отчёт матча\nМатч: 8d0c91bca4cf872465d374a4c5a2473d\nВерсия: 0.2.32 (сборка a5857fd8f38b)\nДата: 13.11.2026 20:58\nРежим: одиночный\nАрена: Хребет Великой Совы\nПобеждённые боссы: Эхо Шести Глаз\nРезультат: ПОБЕДА за 30:37\nГерой: Karen Kaurio (plague_doctor), уровень героя 92\nУбийств: 49903. Получено урона: 270\nЭкспериментальная строка: тест парсера\nЗолото: собрано 27 + выход 3 = 105 (в банк: да)\nКарты за забег: roots ×2, storm ×2, embers ×1, dawn ×1\nКарты сохранены в коллекцию: да\n--- БИЛД ---\nПила — ур. 27\n  Талант: Острая заточка — ×12\n  Перезарядка: 1.00 с | Острая заточка: 16.00 урона\n--- УРОН ПО СПОСОБНОСТЯМ ---\nГаз: 489 707 (50%)\nПила: 201 602 (21%)"}];
+const WARNINGS = ["строка 5: не распознано: 'Экспериментальная строка: тест парсера'"];
+const PALETTE = ["#7aa2f7","#bb9af7","#9ece6a","#e0af68","#f7768e","#7dcfff","#ff9e64","#73daca","#c0caf5","#fc7b81","#b4f9f8","#89ddff"];
+Chart.defaults.color = "#9aa4b2";
+Chart.defaults.borderColor = "#262b36";
+Chart.defaults.font.family = '"Segoe UI", system-ui, sans-serif';
+
+const $ = s => document.querySelector(s);
+const med = a => { if (!a.length) return null; const s=[...a].sort((x,y)=>x-y); const m=s.length>>1; return s.length%2 ? s[m] : (s[m-1]+s[m])/2; };
+const fmtInt = n => n.toLocaleString("ru-RU");
+const fmtDur = sec => { sec=Math.round(sec); const h=Math.floor(sec/3600), m=Math.floor(sec%3600/60), s=sec%60; return h ? h+":"+String(m).padStart(2,"0")+":"+String(s).padStart(2,"0") : m+":"+String(s).padStart(2,"0"); };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const uniqSorted = (arr, cmp) => [...new Set(arr)].sort(cmp);
+const verKey = v => (v||"0").split(".").map(p=>parseInt(p)||0);
+
+function fillSelect(sel, values) {
+  for (const v of values) { const o=document.createElement("option"); o.value=v; o.textContent=v; sel.appendChild(o); }
+}
+fillSelect($("#f-version"), uniqSorted(RUNS.map(r=>r.version), (a,b)=>{const ka=verKey(a),kb=verKey(b);for(let i=0;i<3;i++){if((ka[i]||0)!==(kb[i]||0))return (ka[i]||0)-(kb[i]||0);}return 0;}));
+fillSelect($("#f-hero"), uniqSorted(RUNS.map(r=>r.hero_label), (a,b)=>a.localeCompare(b,"ru")));
+fillSelect($("#f-arena"), uniqSorted(RUNS.map(r=>r.arena||"?"), (a,b)=>a.localeCompare(b,"ru")));
+fillSelect($("#f-mode"), uniqSorted(RUNS.map(r=>r.mode||"?"), (a,b)=>a.localeCompare(b,"ru")));
+["f-version","f-hero","f-arena","f-mode","f-result"].forEach(id => $("#"+id).addEventListener("change", update));
+$("#f-q").addEventListener("input", update);
+
+function currentRuns() {
+  const f = {
+    version: $("#f-version").value, hero: $("#f-hero").value, arena: $("#f-arena").value,
+    mode: $("#f-mode").value, result: $("#f-result").value, q: $("#f-q").value.trim().toLowerCase(),
+  };
+  return RUNS.filter(r =>
+    (f.version==="all" || r.version===f.version) &&
+    (f.hero==="all" || r.hero_label===f.hero) &&
+    (f.arena==="all" || (r.arena||"?")===f.arena) &&
+    (f.mode==="all" || (r.mode||"?")===f.mode) &&
+    (f.result==="all" || (r.result||{}).kind===f.result) &&
+    (!f.q || JSON.stringify([r.tester,r.liked,r.disliked,r.report_text,r.arena,r.hero_label,r.version,(r.weapons||[]).map(w=>w.title+" "+(w.talents||[]).map(t=>t.name).join(","))]).toLowerCase().includes(f.q))
+  );
+}
+
+let charts = [];
+function makeChart(id, cfg) { const c = new Chart($(id), cfg); charts.push(c); }
+const legend = { labels: { boxWidth: 12, boxHeight: 12 } };
+
+function update() {
+  charts.forEach(c => c.destroy()); charts = [];
+  const runs = currentRuns();
+
+  // --- KPI ---
+  const wins = runs.filter(r => r.result.kind === "victory");
+  const winDur = med(wins.map(r => r.result.seconds).filter(Boolean));
+  $("#kpis").innerHTML = [
+    ["Забегов", fmtInt(runs.length)],
+    ["Побед", fmtInt(wins.length)],
+    ["Винрейт", runs.length ? Math.round(wins.length/runs.length*100)+"%" : "—"],
+    ["Медиана победы", winDur ? fmtDur(winDur) : "—"],
+    ["Убийств всего", fmtInt(runs.reduce((s,r)=>s+(r.kills||0),0))],
+    ["Тестеров", fmtInt(new Set(runs.map(r=>r.tester||"?")).size)],
+  ].map(([l,v]) => `<div class="kpi"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+
+  // --- Винрейт по героям ---
+  const heroes = uniqSorted(runs.map(r=>r.hero_label), (a,b)=>a.localeCompare(b,"ru"));
+  const heroWR = heroes.map(h => { const rs = runs.filter(r=>r.hero_label===h); const w = rs.filter(r=>r.result.kind==="victory").length; return { n: rs.length, wr: Math.round(w/rs.length*100) }; });
+  makeChart("#c-hero", { type: "bar", data: { labels: heroes, datasets: [
+    { label: "Винрейт, %", data: heroWR.map(x=>x.wr), backgroundColor: "#7aa2f7", yAxisID: "y" },
+    { label: "Забегов", data: heroWR.map(x=>x.n), backgroundColor: "#3b4261", yAxisID: "y1" },
+  ]}, options: { responsive: true, maintainAspectRatio: false, scales: {
+    y: { min: 0, max: 100, position: "left" }, y1: { position: "right", grid: { drawOnChartArea: false }, ticks: { precision: 0 } },
+  }, plugins: { legend } } });
+
+  // --- Динамика по версиям ---
+  const versions = uniqSorted(runs.map(r=>r.version), (a,b)=>{const ka=verKey(a),kb=verKey(b);for(let i=0;i<3;i++){if((ka[i]||0)!==(kb[i]||0))return (ka[i]||0)-(kb[i]||0);}return 0;});
+  const vStats = versions.map(v => { const rs = runs.filter(r=>r.version===v); const w = rs.filter(r=>r.result.kind==="victory").length; return { n: rs.length, wr: rs.length ? Math.round(w/rs.length*100) : 0 }; });
+  makeChart("#c-version", { data: { labels: versions, datasets: [
+    { type: "line", label: "Винрейт, %", data: vStats.map(x=>x.wr), borderColor: "#bb9af7", backgroundColor: "#bb9af7", yAxisID: "y", tension: 0.3 },
+    { type: "bar", label: "Забегов", data: vStats.map(x=>x.n), backgroundColor: "#3b4261", yAxisID: "y1" },
+  ]}, options: { responsive: true, maintainAspectRatio: false, scales: {
+    y: { min: 0, max: 100 }, y1: { position: "right", grid: { drawOnChartArea: false }, ticks: { precision: 0 } },
+  }, plugins: { legend } } });
+
+  // --- Доля урона: средняя по способностям и по забегам ---
+  const sources = [...new Set(runs.flatMap(r => Object.keys(r.damage||{})))];
+  const share = (r, src) => r.damage_total ? (r.damage[src]||0)/r.damage_total*100 : 0;
+  const avgShare = sources.map(src => { const rs = runs.filter(r => (r.damage||{})[src] !== undefined); return rs.length ? rs.reduce((s,r)=>s+share(r,src),0)/rs.length : 0; });
+  const order = sources.map((s,i)=>[s,avgShare[i]]).sort((a,b)=>b[1]-a[1]);
+  makeChart("#c-dmg-avg", { type: "bar", data: { labels: order.map(x=>x[0]), datasets: [
+    { label: "Средняя доля, %", data: order.map(x=>Math.round(x[1]*10)/10), backgroundColor: (ctx)=>PALETTE[ctx.dataIndex % PALETTE.length] },
+  ]}, options: { indexAxis: "y", responsive: true, maintainAspectRatio: false, scales: { x: { min: 0, max: 100 } }, plugins: { legend: { display: false } } } });
+
+  const recent = [...runs].sort((a,b)=>(a.ts_iso||"").localeCompare(b.ts_iso||"")).slice(-30);
+  makeChart("#c-dmg-runs", { type: "bar", data: { labels: recent.map(r => (r.ts_iso||"").slice(5,10).split("-").reverse().join(".")+" "+r.hero_name), datasets: sources.map((src,i) => ({
+    label: src, data: recent.map(r => Math.round(share(r,src)*10)/10), backgroundColor: PALETTE[i % PALETTE.length],
+  }))}, options: { responsive: true, maintainAspectRatio: false, scales: { x: { stacked: true, ticks: { maxRotation: 60, minRotation: 40 } }, y: { stacked: true, min: 0, max: 100, title: { display: true, text: "% урона" } } }, plugins: { legend: { ...legend, position: "right" } } } });
+
+  // --- Таланты ---
+  const talents = {};
+  for (const r of runs) for (const w of (r.weapons||[])) for (const t of (w.talents||[])) {
+    const key = w.title + ": " + t.name;
+    (talents[key] ??= { picks: 0, mults: [], wins: 0 }).picks++;
+    if (t.mult != null) talents[key].mults.push(t.mult);
+    if (r.result.kind === "victory") talents[key].wins++;
+  }
+  const top = Object.entries(talents).sort((a,b)=>b[1].picks-a[1].picks).slice(0, 20);
+  makeChart("#c-talents", { type: "bar", data: { labels: top.map(([k])=>k), datasets: [
+    { label: "Пиков", data: top.map(([,v])=>v.picks), backgroundColor: "#9ece6a" },
+  ]}, options: { indexAxis: "y", responsive: true, maintainAspectRatio: false, plugins: {
+    legend: { display: false },
+    tooltip: { callbacks: { afterLabel: (ctx) => {
+      const v = top[ctx.dataIndex][1];
+      const m = v.mults.length ? "×"+(v.mults.reduce((a,b)=>a+b,0)/v.mults.length).toFixed(1)+" в среднем" : "—";
+      return [m, "винрейт с ним: "+(v.picks?Math.round(v.wins/v.picks*100):0)+"%"];
+    } } },
+  }, scales: { x: { ticks: { precision: 0 } } } } });
+
+  // --- Длительность × убийства ---
+  const pt = (kind, color) => ({ label: kind==="victory"?"Победы":"Смерти", data: runs.filter(r=>r.result.kind===kind && r.result.seconds).map(r=>({ x: r.result.seconds/60, y: r.kills, r })), backgroundColor: color, pointRadius: 5, pointHoverRadius: 7 });
+  makeChart("#c-scatter", { type: "scatter", data: { datasets: [pt("victory", "#7dd97b"), pt("defeat", "#e07070")] }, options: {
+    responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: "Длительность, мин" } }, y: { title: { display: true, text: "Убийств" } } },
+    plugins: { legend, tooltip: { callbacks: { label: (ctx) => {
+      const r = ctx.raw.r;
+      return `${r.hero_label}, ${(r.ts_iso||"").slice(0,10)} — ${fmtInt(r.kills)} уб., ${fmtDur(r.result.seconds)}`;
+    } } } } } });
+
+  // --- Карты ---
+  const cards = {};
+  for (const r of runs) for (const [cid, n] of Object.entries(r.cards||{})) cards[cid] = (cards[cid]||0) + n;
+  makeChart("#c-cards", { type: "bar", data: { labels: Object.keys(cards), datasets: [
+    { label: "Взято всего", data: Object.values(cards), backgroundColor: "#e0af68" },
+  ]}, options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { ticks: { precision: 0 } } } } });
+
+  // --- Таблица забегов ---
+  const rows = [...runs].sort((a,b)=>(b.ts_iso||"").localeCompare(a.ts_iso||"")).map((r,i) => {
+    const res = r.result;
+    const resHtml = `<span class="${res.kind==="victory"?"win":"loss"}">${res.kind==="victory"?"ПОБЕДА":"СМЕРТЬ"}${res.seconds?" "+fmtDur(res.seconds):""}</span>`;
+    const gold = r.gold ? `${fmtInt(r.gold.total)}${r.gold.banked?"":" ⚠"}` : (r.gold_lost ? "−"+fmtInt(r.gold_lost) : "—");
+    const fb = [ r.liked ? `<span class="ok">+ ${esc(r.liked).slice(0,80)}</span>` : "", r.disliked ? `<br><span class="bad">− ${esc(r.disliked).slice(0,80)}</span>` : "" ].join("");
+    const main = `<tr class="run" data-i="${i}"><td>${(r.ts_iso||"").slice(0,16).replace("T"," ")}</td><td>${esc(r.version)}</td><td>${esc(r.hero_label)}<br><span class="sub">ур. ${r.hero_level??"?"}</span></td><td>${esc(r.arena||"?")}</td><td>${resHtml}</td><td class="num">${fmtInt(r.kills||0)}</td><td class="num">${fmtInt(r.damage_taken||0)}</td><td class="num">${gold}</td><td>${esc(r.tester||"?")}</td><td>${fb}</td></tr>`;
+    const detail = `<tr class="detail" data-d="${i}" style="display:none"><td colspan="10"><pre class="report">${esc(r.report_text)}</pre></td></tr>`;
+    return main + detail;
+  }).join("");
+  $("#runs-body").innerHTML = rows || `<tr><td colspan="10" style="color:#8b94a3">Нет забегов под текущие фильтры</td></tr>`;
+  document.querySelectorAll("tr.run").forEach(tr => tr.addEventListener("click", () => {
+    const d = document.querySelector(`tr.detail[data-d="${tr.dataset.i}"]`);
+    if (d) d.style.display = d.style.display === "none" ? "" : "none";
+  }));
+
+  // --- Предупреждения парсера ---
+  $("#warnings").innerHTML = WARNINGS.length
+    ? `<details><summary>Проблемы разбора: ${WARNINGS.length} (строки экспорта, что не удалось распознать)</summary><ul>${WARNINGS.map(w=>`<li>${esc(w)}</li>`).join("")}</ul></details>`
+    : "";
+}
+
+update();
+</script>
+</body>
+</html>
